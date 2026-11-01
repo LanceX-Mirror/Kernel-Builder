@@ -41,7 +41,7 @@ env:
   KERNELSU_BRANCH : "v3.3.1+36"
   KERNELSU_AUTO_GET : "false"
   KERNELSU_AUTO_FORK : "xxksu"
-  KERNELSU_METHOD : "manual"
+  KERNELSU_METHOD : "none"
 
   SUSFS_ENABLE : false
   SUSFS_FIXED : false
@@ -123,14 +123,10 @@ jobs:
           # Runner-side config injection: the repo defconfig stays untouched.
           CFG="$GITHUB_WORKSPACE/device_kernel/arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
           {
-            echo "CONFIG_KSU=y"
-            echo "CONFIG_KSU_LSM_SECURITY_HOOKS=y"
-            echo "# CONFIG_KSU_KPROBES_KSUD is not set"
-            echo "CONFIG_KSU_TAMPER_SYSCALL_TABLE=y"
-            echo "# CONFIG_KSU_HACK_ARM64_BRANCH_LINK is not set"
+            echo "# CONFIG_WIREGUARD is not set"
           } >> "$CFG"
 
-          echo "[+] defconfig: ${{ env.DEFCONFIG_NAME }} (KSU injected on runner)"
+          echo "[+] defconfig: ${{ env.DEFCONFIG_NAME }} (pure kernel, no KSU, no WireGuard)"
           echo "[+] branch: ${{ env.KERNEL_BRANCH }}"
           tail -5 "$CFG"
 
