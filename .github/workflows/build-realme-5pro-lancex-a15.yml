@@ -1,4 +1,5 @@
 name: Build Realme 5 Pro (LanceX Pure Kernel A15)
+# LanceX bump-4.10: kernel d3435f5b3334e028af0453462d86de5bceaa5173 (LanceX-Mirror/LanceX)
 
 on:
   workflow_dispatch:
