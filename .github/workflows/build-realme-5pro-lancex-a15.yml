@@ -122,11 +122,7 @@ jobs:
 
           # Runner-side config injection: the repo defconfig stays untouched.
           CFG="$GITHUB_WORKSPACE/device_kernel/arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
-          {
-            echo "# CONFIG_WIREGUARD is not set"
-          } >> "$CFG"
-
-          echo "[+] defconfig: ${{ env.DEFCONFIG_NAME }} (pure kernel, no KSU, no WireGuard)"
+          echo "[+] defconfig: ${{ env.DEFCONFIG_NAME }} (pure kernel, no KSU)"
           echo "[+] branch: ${{ env.KERNEL_BRANCH }}"
           tail -5 "$CFG"
 
