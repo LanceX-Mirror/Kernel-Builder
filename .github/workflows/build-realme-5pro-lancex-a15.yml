@@ -14,10 +14,10 @@ env:
 
   # LLVM=1 is honoured by this 4.9 tree (Makefile has ifneq ($(LLVM),) and LLVM_IAS blocks).
   CUSTOM_CMDS : "CLANG_TRIPLE=aarch64-linux-gnu-"
-  EXTRA_CMDS : "LD=ld.lld LLVM=1 LLVM_IAS=1 LOCALVERSION=-LanceX"
+  EXTRA_CMDS : "LD=ld.lld LLVM=1 LLVM_IAS=1"
 
-  KERNEL_SOURCE : "https://github.com/HSB-Device/LanceX.git"
-  KERNEL_BRANCH : "master"
+  KERNEL_SOURCE : "https://github.com/LanceX-Mirror/LanceX.git"
+  KERNEL_BRANCH : "bump-4.10"
 
   # proton-clang ships its own aarch64/arm cross GCC prefix; build-env auto-sets both when the URL matches *proton*.
   CLANG_SOURCE : "https://github.com/kdrag0n/proton-clang.git"
@@ -56,7 +56,7 @@ env:
 
   # AnyKernel3 branch LanceX already targets RMX1971 (device.name1) with the correct boot BLOCK,
   # so no osm0sis-path sed rewriting is needed or applied.
-  AK3_SOURCE : "https://github.com/HSB-Device/AnyKernel3.git"
+  AK3_SOURCE : "https://github.com/LanceX-Mirror/AnyKernel3.git"
   AK3_BRANCH : "LanceX"
 
   BOOT_SOURCE : ""
