@@ -1,0 +1,228 @@
+name: Build LanceX Master + KSU (arm64 runner, ccache export)
+# Purpose: build the 4.9.337 master tree + backslashxx KernelSU on a
+# GitHub-hosted arm64 runner, using the same LLVM 13.0.0 aarch64 toolchain as
+# the local device, and export the aarch64 ccache as an artifact so local
+# rebuilds can hit it instead of compiling everything on the phone.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ ci/lancex-arm64 ]
+    paths:
+      - '.github/workflows/build-lancex-master-ksu-arm64.yml'
+
+env:
+  KERNEL_REPO: "https://github.com/LanceX-Mirror/LanceX.git"
+  KERNEL_BRANCH: "master"
+  KSU_REPO: "https://github.com/backslashxx/KernelSU.git"
+  KSU_REF: "v3.3.1+36"
+  AK3_REPO: "https://github.com/LanceX-Mirror/AnyKernel3.git"
+  AK3_BRANCH: "LanceX"
+  DEFCONFIG: "sdm670-perf_defconfig"
+  LLVM_URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-13.0.0/clang+llvm-13.0.0-aarch64-linux-gnu.tar.xz"
+  LLVM_SHA256: "968d65d2593850ee9b37fcda074fb7641529bd45d2f976af6c8197de3c22612f"
+
+jobs:
+  build:
+    name: LanceX master 4.9.337 + KSU (arm64)
+    runs-on: ubuntu-22.04-arm
+    timeout-minutes: 90
+    env:
+      # Keep the ccache key independent of absolute source paths inside the
+      # kernel tree. The compiler path is recorded in ccache-env.txt.
+      CCACHE_DIR: "${{ github.workspace }}/.ccache"
+      CCACHE_COMPILERCHECK: "content"
+      CCACHE_BASEDIR: "${{ github.workspace }}/device_kernel"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_MAXSIZE: "2G"
+      CCACHE_COMPRESS: "false"
+
+    steps:
+      - name: Checkout workflow repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git bc bison flex libssl-dev libelf-dev openssl make gcc g++ binutils \
+            cpio device-tree-compiler lz4 zstd xz-utils zip unzip python3 \
+            ccache libtinfo5 binutils-arm-linux-gnueabi
+
+      - name: Download official LLVM 13.0.0 aarch64
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o /tmp/llvm13.tar.xz "$LLVM_URL"
+          echo "$LLVM_SHA256  /tmp/llvm13.tar.xz" | sha256sum -c -
+          mkdir -p "$GITHUB_WORKSPACE/clang-custom"
+          tar -xJf /tmp/llvm13.tar.xz -C "$GITHUB_WORKSPACE/clang-custom" --strip-components=1
+          export PATH="$GITHUB_WORKSPACE/clang-custom/bin:$PATH"
+          clang --version | head -3
+          ld.lld --version | head -1
+          command -v clang ld.lld llvm-ar
+          clang -print-resource-dir
+          if ! command -v aarch64-linux-gnu-elfedit >/dev/null; then
+            echo "aarch64-linux-gnu-elfedit missing" >&2
+            exit 1
+          fi
+          if ! command -v arm-linux-gnueabi-ld >/dev/null; then
+            echo "arm-linux-gnueabi-ld missing" >&2
+            exit 1
+          fi
+
+      - name: Clone kernel, KernelSU and AnyKernel3
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" device_kernel
+          git clone --depth=1 -b "$AK3_BRANCH" "$AK3_REPO" AnyKernel3
+          cd device_kernel
+          git clone --depth=1 -b "$KSU_REF" "$KSU_REPO" KernelSU
+          echo "[+] kernel HEAD: $(git rev-parse HEAD)"
+          echo "[+] KSU HEAD: $(git -C KernelSU rev-parse HEAD)"
+          ln -sfn ../KernelSU/kernel drivers/kernelsu
+          grep -qF 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile || \
+            printf '\nobj-$(CONFIG_KSU) += kernelsu/\n' >> drivers/Makefile
+          grep -qF 'source "drivers/kernelsu/Kconfig"' drivers/Kconfig || \
+            sed -i '/^endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+          ls -l drivers/kernelsu
+          tail -3 drivers/Makefile
+
+      - name: Configure defconfig and inject KernelSU
+        run: |
+          set -euo pipefail
+          export PATH="$GITHUB_WORKSPACE/clang-custom/bin:$PATH"
+          cd "$GITHUB_WORKSPACE/device_kernel"
+
+          make O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            "$DEFCONFIG"
+
+          cat > /tmp/ksu.config <<'EOF'
+          CONFIG_KSU=y
+          CONFIG_KSU_TAMPER_SYSCALL_TABLE=y
+          CONFIG_KSU_LSM_SECURITY_HOOKS=y
+          CONFIG_KSU_FEATURE_SULOG=y
+          CONFIG_KSU_FEATURE_ADBROOT=y
+          CONFIG_KSU_HEURISTIC_IN_TREE_BUILD=y
+          CONFIG_KSU_KPROBES_KSUD=n
+          CONFIG_KSU_DISABLE_32BIT_HOOKS=n
+          CONFIG_KSU_HOSTSREDIRECT=n
+          CONFIG_KSU_ENABLE_FULL_UID_CHECKS=n
+          CONFIG_KSU_THRONE_TRACKER_ALWAYS_THREADED=n
+          CONFIG_KSU_NOPRINTK=n
+          CONFIG_KSU_SHELL_HAS_SU_ALWAYS=n
+          CONFIG_KSU_DEBUG=n
+          EOF
+
+          ./scripts/kconfig/merge_config.sh -O out -m out/.config /tmp/ksu.config
+          make O=out ARCH=arm64 CC=clang LD=ld.lld LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            olddefconfig
+
+          echo "=== final KSU config ==="
+          grep -E '^CONFIG_KSU' out/.config
+          grep -q '^CONFIG_KSU=y' out/.config
+          grep -q '^CONFIG_KSU_TAMPER_SYSCALL_TABLE=y' out/.config
+          grep -q '^CONFIG_KSU_LSM_SECURITY_HOOKS=y' out/.config
+
+      - name: Record compiler provenance
+        run: |
+          set -euo pipefail
+          export PATH="$GITHUB_WORKSPACE/clang-custom/bin:$PATH"
+          cd "$GITHUB_WORKSPACE/device_kernel"
+          {
+            echo "GITHUB_WORKSPACE=$GITHUB_WORKSPACE"
+            echo "kernel_head=$(git rev-parse HEAD)"
+            echo "ksu_head=$(git -C KernelSU rev-parse HEAD)"
+            echo "clang_path=$(command -v clang)"
+            echo "clang_resource_dir=$(clang -print-resource-dir)"
+            clang --version
+            ld.lld --version | head -1
+            sha256sum "$(command -v clang)"
+            ccache --version
+            echo "--- ccache config ---"
+            ccache -p
+            echo "--- ccache env ---"
+            env | grep '^CCACHE_' | sort
+          } | tee ccache-env.txt
+
+      - name: Build kernel with ccache
+        run: |
+          set -euo pipefail
+          export PATH="$GITHUB_WORKSPACE/clang-custom/bin:$PATH"
+          cd "$GITHUB_WORKSPACE/device_kernel"
+
+          mkdir -p "$CCACHE_DIR"
+          ccache --version
+          ccache --zero-stats
+
+          make -j"$(nproc)" O=out ARCH=arm64 \
+            CC="ccache clang" LD=ld.lld LLVM=1 LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            2>&1 | tee build.log
+
+          ccache -s | tee ccache-stats.txt
+
+      - name: Verify kernel image
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/device_kernel"
+          echo "=== kernel image ==="
+          ls -l out/arch/arm64/boot/Image.gz-dtb
+          cat out/include/config/kernel.release
+          gzip -dc out/arch/arm64/boot/Image.gz-dtb > /tmp/Image.raw
+          strings -n 8 /tmp/Image.raw | grep -m1 -E '^Linux version'
+
+          { echo '### ccache'; ccache -s; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Pack AnyKernel3 zip
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          rm -rf ak3-pack
+          mkdir -p ak3-pack
+          cp -a AnyKernel3/. ak3-pack/
+          cp device_kernel/out/arch/arm64/boot/Image.gz-dtb ak3-pack/
+          cd ak3-pack
+          zip -r9 "$GITHUB_WORKSPACE/RMX1971-aosp_a15-master-ksu-arm64.zip" .
+          ls -l "$GITHUB_WORKSPACE/RMX1971-aosp_a15-master-ksu-arm64.zip"
+
+      - name: Tar ccache for download
+        if: always()
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p .ccache
+          tar -cf ccache-aarch64.tar .ccache
+          ls -l ccache-aarch64.tar
+          sha256sum ccache-aarch64.tar | tee ccache-aarch64.tar.sha256
+
+      - name: Upload ccache artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ccache-aarch64-master-ksu
+          path: ccache-aarch64.tar
+          compression-level: 0
+          retention-days: 7
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-master-ksu-arm64
+          path: |
+            RMX1971-aosp_a15-master-ksu-arm64.zip
+            ccache-aarch64.tar.sha256
+            device_kernel/build.log
+            device_kernel/ccache-stats.txt
+            device_kernel/ccache-env.txt
+          if-no-files-found: warn
+          retention-days: 7
