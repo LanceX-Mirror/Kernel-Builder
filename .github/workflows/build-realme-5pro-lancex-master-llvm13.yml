@@ -1,0 +1,171 @@
+name: Build Realme 5 Pro (LanceX Master LLVM 13.0.0)
+# Control build: LanceX master = 4.9.337, pure kernel (no KSU), official LLVM
+# 13.0.0 release instead of proton-clang. Purpose: check whether a master
+# kernel built with the LLVM 13.0.0 toolchain boots on RMX1971.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ ci/lancex-master ]
+    paths:
+      - '.github/workflows/build-realme-5pro-lancex-master-llvm13.yml'
+
+env:
+  # Device env
+  DEVICE_NAME : "realme_5_pro"
+  DEVICE_CODENAME : "RMX1971"
+
+  CUSTOM_CMDS : "CLANG_TRIPLE=aarch64-linux-gnu-"
+  EXTRA_CMDS : "LD=ld.lld LLVM=1 LLVM_IAS=1"
+
+  KERNEL_SOURCE : "https://github.com/LanceX-Mirror/LanceX.git"
+  KERNEL_BRANCH : "master"
+
+  # Official LLVM 13.0.0 release, x86_64 runner build. The local aarch64
+  # setup uses the same upstream version (clang+llvm-13.0.0-aarch64-linux-gnu).
+  CLANG_SOURCE : "https://github.com/llvm/llvm-project/releases/download/llvmorg-13.0.0/clang+llvm-13.0.0-x86_64-linux-gnu-ubuntu-20.04.tar.xz"
+  CLANG_BRANCH : ""
+
+  # Official LLVM does not bundle a cross GCC, so build-env installs Ubuntu's
+  # aarch64-linux-gnu and arm-linux-gnueabi toolchains for the compat vDSO.
+  GCC_GNU : true
+  GCC_64_SOURCE : ""
+  GCC_64_BRANCH : ""
+  GCC_32_SOURCE : ""
+  GCC_32_BRANCH : ""
+
+  DEFCONFIG_SOURCE: ""
+  DEFCONFIG_NAME : "sdm670-perf_defconfig"
+  DEFCONFIG_ORIGIN_IMAGE: ""
+  DEFCONFIG_FROM_BOOT: false
+
+  # Pure kernel: no KernelSU, no SUSFS, no extra modules.
+  KERNELSU_SOURCE : ""
+  KERNELSU_BRANCH : ""
+  KERNELSU_AUTO_GET : "false"
+  KERNELSU_AUTO_FORK : "xxksu"
+  KERNELSU_METHOD : "none"
+
+  SUSFS_ENABLE : false
+  SUSFS_FIXED : false
+
+  REKERNEL_ENABLE: false
+  DROIDSPACES_ENABLE: false
+  NOMOUNT_ENABLE: false
+  BASEBAND_GUARD_ENABLE: false
+  BASEBAND_GUARD_BOOT: false
+  KPM_ENABLE: false
+  KPM_INLINE: false
+  KPM_KPATCH_NEXT: false
+
+  AK3_SOURCE : "https://github.com/LanceX-Mirror/AnyKernel3.git"
+  AK3_BRANCH : "LanceX"
+
+  BOOT_SOURCE : ""
+
+  NEED_DTBO : false
+  NEED_SAFE_DTBO : false
+
+  ROM_TEXT : "aosp_a15"
+
+  # Other env
+  PYTHON_VERSION: "3"
+
+  PACK_METHOD: "AnyKernel3"
+  PACK_KMODULES: "false"
+
+  PATCHES_SOURCE: ""
+  PATCHES_BRANCH: ""
+  SUSFS_FOLDER_FIXED: ""
+  SUSFS_PATCH_FIXED: ""
+  HOOK_METHOD: "syscall"
+  KPM_PATCH_SOURCE: ""
+
+  GENERATE_DTB: "false"
+  GENERATE_CHIP: "qcom"
+
+  BUILD_DEBUGGER: "true"
+  SKIP_PATCH: "true"
+
+  BUILD_OTHER_CONFIG: "false"
+  MERGE_CONFIG_FILES: ""
+
+  FREE_MORE_SPACE: "true"
+
+jobs:
+  build-kernel:
+    name: Realme 5 Pro (LanceX Master LLVM 13.0.0)
+    runs-on: ubuntu-24.04
+    env:
+      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
+      CCACHE_NOHASHDIR: "true"
+      CCACHE_HARDLINK: "true"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Compilation environment preparation
+        uses: ./.github/workflows/build-env
+
+      - name: Get necessary tools
+        uses: ./.github/workflows/build-ready
+
+      - name: Extra Kernel Options
+        run: |
+          cd $GITHUB_WORKSPACE
+
+          echo "[+] compiler provenance:"
+          clang --version | head -3
+          ld.lld --version | head -1
+          command -v clang ld.lld llvm-ar
+
+          # Some toolchains ship a host ld that cannot link HOSTCC tools.
+          if [ -f "$GITHUB_WORKSPACE/clang-custom/bin/ld" ]; then
+            mv "$GITHUB_WORKSPACE/clang-custom/bin/ld" "$GITHUB_WORKSPACE/clang-custom/bin/ld.proton.host.bak"
+            echo "[+] sidelined toolchain host ld"
+          fi
+
+          CFG="$GITHUB_WORKSPACE/device_kernel/arch/arm64/configs/${{ env.DEFCONFIG_NAME }}"
+          echo "[+] defconfig: ${{ env.DEFCONFIG_NAME }} (pure kernel, no KSU)"
+          echo "[+] branch: ${{ env.KERNEL_BRANCH }}"
+          tail -5 "$CFG"
+
+      - name: Audit provenance and purity
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+          echo "[+] HEAD: $(git rev-parse HEAD)"
+          echo "[+] working tree changes:"
+          git status --porcelain | head -20
+          echo "[+] KSU driver symlink: $(readlink drivers/kernelsu || echo MISSING)"
+          echo "[+] KSU config on runner defconfig:"
+          grep -n 'CONFIG_KSU' arch/arm64/configs/${{ env.DEFCONFIG_NAME }} || true
+
+      - name: Build Process
+        uses: ./.github/workflows/build-process
+
+      - name: Verify built kernel (release, ISA, image)
+        run: |
+          cd $GITHUB_WORKSPACE/device_kernel
+          echo "=== FINAL .config (compiler) ==="
+          grep -E '^CONFIG_(CC_IS_CLANG|CLANG_VERSION|COMPAT=|LOCALVERSION)' out/.config || true
+          echo "=== vmlinux present? ==="
+          ls -l out/vmlinux 2>/dev/null || echo "out/vmlinux MISSING"
+          echo "=== ldapr count (must be 0 on armv8.2) ==="
+          llvm-objdump -d out/vmlinux 2>/dev/null | grep -c ldapr || true
+          echo "=== KSU symbols in vmlinux (must be 0) ==="
+          llvm-nm out/vmlinux 2>/dev/null | grep -c ksu_ || true
+          echo "=== Image.gz-dtb ==="
+          ls -l out/arch/arm64/boot/Image.gz-dtb 2>/dev/null || echo MISSING
+          echo "=== decompressed kernel strings ==="
+          gzip -dc out/arch/arm64/boot/Image.gz-dtb 2>/dev/null > /tmp/Image.raw || true
+          ls -l /tmp/Image.raw 2>/dev/null || echo "decompress failed"
+          strings -n 8 /tmp/Image.raw 2>/dev/null | grep -m1 -E "^Linux version" || true
+          echo "=== kernel release ==="
+          cat out/include/config/kernel.release 2>/dev/null || echo none
+
+      - name: Pack Process
+        uses: ./.github/workflows/pack-process
+
+      - name: Upload Artifacts
+        uses: ./.github/workflows/upload-files
