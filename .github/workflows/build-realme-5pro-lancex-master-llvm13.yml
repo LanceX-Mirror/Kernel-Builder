@@ -114,6 +114,7 @@ jobs:
       - name: Extra Kernel Options
         run: |
           cd $GITHUB_WORKSPACE
+          export PATH="$GITHUB_WORKSPACE/clang-custom/bin:$PATH"
 
           echo "[+] compiler provenance:"
           clang --version | head -3
