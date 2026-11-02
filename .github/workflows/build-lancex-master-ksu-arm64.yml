@@ -177,7 +177,9 @@ jobs:
           echo "=== kernel image ==="
           ls -l out/arch/arm64/boot/Image.gz-dtb
           cat out/include/config/kernel.release
-          gzip -dc out/arch/arm64/boot/Image.gz-dtb > /tmp/Image.raw
+          # The appended DTB makes gzip report trailing garbage (exit 2); the
+          # decompressed Image is still valid, so tolerate that exit status.
+          gzip -dc out/arch/arm64/boot/Image.gz-dtb > /tmp/Image.raw || true
           strings -n 8 /tmp/Image.raw | grep -m1 -E '^Linux version'
 
           { echo '### ccache'; ccache -s; } >> "$GITHUB_STEP_SUMMARY"
